@@ -1,0 +1,8 @@
+FROM public.ecr.aws/lambda/python:3.13
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY ex1_3.py .
+
+CMD ["ex1_3.lambda_handler"]

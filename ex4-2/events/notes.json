@@ -1,0 +1,14 @@
+{
+  "httpMethod": "POST",
+  "path": "/notes",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "queryStringParameters": null,
+  "body": "{\"note_text\": \"Don't forget to delete your stack!\", \"category\": \"reminder\"}",
+  "pathParameters": null,
+  "requestContext": {
+    "resourcePath": "/notes",
+    "httpMethod": "POST"
+  }
+}

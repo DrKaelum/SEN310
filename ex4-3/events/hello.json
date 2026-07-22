@@ -1,0 +1,12 @@
+{
+  "httpMethod": "GET",
+  "path": "/hello",
+  "headers": {},
+  "queryStringParameters": null,
+  "body": null,
+  "pathParameters": null,
+  "requestContext": {
+    "resourcePath": "/hello",
+    "httpMethod": "GET"
+  }
+}

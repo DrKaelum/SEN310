@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ex4-3 — Local DynamoDB Persistence
+  Ex4-2's NotesFunction now actually writes to (and reads from) DynamoDB.
+  We now do full SAM deployment
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 10
+
+Resources:
+
+  HelloWorldFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello_world/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          INSTRUCTOR_NAME: Instructor
+      Events:
+        HelloWorldApi:
+          Type: Api
+          Properties:
+            Path: /hello
+            Method: GET
+
+  GoodbyeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: goodbye/
+      Handler: app.lambda_handler
+      Events:
+        GoodbyeApi:
+          Type: Api
+          Properties:
+            Path: /goodbye
+            Method: GET
+
+  NotesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: notes/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref NotesTable
+      Environment:
+        Variables:
+          NOTES_TABLE: !Ref NotesTable
+      Events:
+        CreateNoteApi:
+          Type: Api
+          Properties:
+            Path: /notes
+            Method: POST
+        GetNoteApi:
+          Type: Api
+          Properties:
+            Path: /notes/{noteId}
+            Method: GET
+
+  NotesTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+Outputs:
+  ApiGatewayEndpoint:
+    Description: "API Gateway endpoint URL for the dev stage"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"

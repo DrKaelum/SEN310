@@ -1,0 +1,14 @@
+{
+  "httpMethod": "GET",
+  "path": "/notes/06bafb43-e15e-4fcb-8110-665e087e2684",
+  "headers": {},
+  "queryStringParameters": null,
+  "body": null,
+  "pathParameters": {
+    "noteId": "06bafb43-e15e-4fcb-8110-665e087e2684"
+  },
+  "requestContext": {
+    "resourcePath": "/notes/{noteId}",
+    "httpMethod": "GET"
+  }
+}

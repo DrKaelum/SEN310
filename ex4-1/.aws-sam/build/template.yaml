@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: "ex4-1 \u2014 First SAM App Two Lambda functions exposed via API Gateway.\n"
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 10
+Resources:
+  HelloWorldFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: HelloWorldFunction
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          INSTRUCTOR_NAME: Instructor
+      Events:
+        HelloWorldApi:
+          Type: Api
+          Properties:
+            Path: /hello
+            Method: GET
+    Metadata:
+      SamResourceId: HelloWorldFunction
+  GoodbyeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: GoodbyeFunction
+      Handler: app.lambda_handler
+      Events:
+        GoodbyeApi:
+          Type: Api
+          Properties:
+            Path: /goodbye
+            Method: GET
+    Metadata:
+      SamResourceId: GoodbyeFunction
+Outputs:
+  ApiGatewayEndpoint:
+    Description: API Gateway endpoint URL for the dev stage
+    Value:
+      Fn::Sub: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/

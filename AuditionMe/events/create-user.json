@@ -1,0 +1,14 @@
+{
+  "httpMethod": "POST",
+  "path": "/api/users",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "queryStringParameters": null,
+  "body": "{\"name\":\"Avery Stone\",\"email\":\"avery@example.com\",\"phone\":\"555-0101\",\"role\":\"performer\",\"password\":\"performer-password\"}",
+  "pathParameters": null,
+  "requestContext": {
+    "resourcePath": "/api/users",
+    "httpMethod": "POST"
+  }
+}

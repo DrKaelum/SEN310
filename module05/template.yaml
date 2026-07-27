@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+ 
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 10
+  Api:
+   
+    EndpointConfiguration: REGIONAL
+
+Resources:
+
+  # ── DynamoDB Tables ───────────────────────────────────────────────────
+
+  PerformancesTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: mod05_Performances
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  AuditionsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: mod05_Auditions
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  # ── SQS Queue ────────────────────────────────────────────────────────
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: mod05-notifications
+
+  # ── Lambda Functions ────────────────────────────────────────────────
+
+  SignUpForAuditionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: mod05-sign-up-for-audition
+      CodeUri: ex5-2/sign_up_for_audition/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt NotificationQueue.QueueName
+      Environment:
+        Variables:
+          PERFORMANCES_TABLE: !Ref PerformancesTable
+          AUDITIONS_TABLE: !Ref AuditionsTable
+          QUEUE_URL: !Ref NotificationQueue
+      Events:
+        SignUpForAuditionApi:
+          Type: Api
+          Properties:
+            Path: /api/auditions
+            Method: POST
+
+  NotifyDirectorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: mod05-notify-director-consumer
+      CodeUri: ex5-2/notify_director/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+      Environment:
+        Variables:
+          AUDITIONS_TABLE: !Ref AuditionsTable
+      Events:
+        NotificationQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  PerformancesTableName:
+    Value: !Ref PerformancesTable
+  AuditionsTableName:
+    Value: !Ref AuditionsTable
+  NotificationQueueUrl:
+    Value: !Ref NotificationQueue
+  NotificationQueueArn:
+    Value: !GetAtt NotificationQueue.Arn
+  ProducerFunctionName:
+    Value: !Ref SignUpForAuditionFunction
+  ConsumerFunctionName:
+    Value: !Ref NotifyDirectorFunction

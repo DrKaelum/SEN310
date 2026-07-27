@@ -1,0 +1,12 @@
+{
+  "httpMethod": "GET",
+  "path": "/api/performances",
+  "headers": {},
+  "queryStringParameters": null,
+  "body": null,
+  "pathParameters": null,
+  "requestContext": {
+    "resourcePath": "/api/performances",
+    "httpMethod": "GET"
+  }
+}

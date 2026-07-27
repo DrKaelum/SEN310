@@ -1,0 +1,14 @@
+{
+  "httpMethod": "POST",
+  "path": "/api/performances",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "queryStringParameters": null,
+  "body": "{\"title\":\"The Glass Menagerie\",\"director\":\"Morgan Lee\",\"castingDirector\":\"Jordan Rivera\",\"venue\":\"AuditionMe Black Box Theatre\",\"performanceDates\":[\"2026-08-14\",\"2026-08-15\"],\"characters\":[\"Amanda\",\"Laura\",\"Tom\"],\"isLive\":true}",
+  "pathParameters": null,
+  "requestContext": {
+    "resourcePath": "/api/performances",
+    "httpMethod": "POST"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "httpMethod": "GET",
+  "path": "/api/performances",
+  "headers": {},
+  "queryStringParameters": {
+    "live": "true"
+  },
+  "body": null,
+  "pathParameters": null,
+  "requestContext": {
+    "resourcePath": "/api/performances",
+    "httpMethod": "GET"
+  }
+}

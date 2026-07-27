@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AuditionMe Lab 4 SAM application
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Handler: bootstrap
+    Architectures:
+      - x86_64
+    Timeout: 10
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin: "'*'"
+
+Resources:
+  CreateUserFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/create-user/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref UsersTable
+      Events:
+        CreateUserApi:
+          Type: Api
+          Properties:
+            Path: /api/users
+            Method: POST
+
+  PostPerformanceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/post-performance/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PerformancesTable
+      Events:
+        PostPerformanceApi:
+          Type: Api
+          Properties:
+            Path: /api/performances
+            Method: POST
+
+  SearchPerformancesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/search-performances/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PerformancesTable
+      Events:
+        SearchPerformancesApi:
+          Type: Api
+          Properties:
+            Path: /api/performances
+            Method: GET
+
+  SignUpForAuditionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/sign-up-for-audition/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+      Environment:
+        Variables:
+          PERFORMANCES_TABLE_NAME: !Ref PerformancesTable
+          AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+      Events:
+        SignUpForAuditionApi:
+          Type: Api
+          Properties:
+            Path: /api/auditions
+            Method: POST
+
+  CastPerformerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/cast-performer/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+      Environment:
+        Variables:
+          AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+      Events:
+        CastPerformerApi:
+          Type: Api
+          Properties:
+            Path: /api/performances/{performanceId}/cast
+            Method: POST
+
+  UsersTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  PerformancesTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  AuditionsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+Outputs:
+  ApiGatewayEndpoint:
+    Description: Base URL for the AuditionMe API
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod"

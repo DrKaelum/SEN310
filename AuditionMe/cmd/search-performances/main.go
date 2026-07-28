@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -101,7 +102,17 @@ func main() {
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	var client scanAPI
 	if err == nil {
-		client = dynamodb.NewFromConfig(cfg)
+		client = newDynamoDBClient(cfg)
 	}
 	lambda.Start(makeHandler(client, tableName, err))
+}
+
+func newDynamoDBClient(cfg aws.Config) *dynamodb.Client {
+	endpoint := strings.TrimSpace(os.Getenv("DYNAMODB_ENDPOINT"))
+	if endpoint == "" {
+		return dynamodb.NewFromConfig(cfg)
+	}
+	return dynamodb.NewFromConfig(cfg, func(options *dynamodb.Options) {
+		options.BaseEndpoint = aws.String(endpoint)
+	})
 }

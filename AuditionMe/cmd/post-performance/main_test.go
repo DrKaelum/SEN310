@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -53,6 +56,65 @@ func TestPostPerformanceRejectsOmittedIsLive(t *testing.T) {
 func TestPostPerformanceRejectsEmptyLists(t *testing.T) {
 	assertRejected(t, `{"title":"Our Town","director":"Dana Lee","castingDirector":"Morgan Ray","venue":"Main Stage","performanceDates":[],"characters":["Emily"],"isLive":true}`)
 	assertRejected(t, `{"title":"Our Town","director":"Dana Lee","castingDirector":"Morgan Ray","venue":"Main Stage","performanceDates":["2026-09-01"],"characters":[],"isLive":true}`)
+}
+
+func TestPostPerformanceRejectsEveryInvalidPostShape(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		message string
+	}{
+		{"missing body", "", "Missing request body"},
+		{"invalid JSON", "{", "Invalid request body"},
+		{"missing title", `{"director":"D","castingDirector":"C","venue":"V","performanceDates":["2026-01-01"],"characters":["A"],"isLive":true}`, "title"},
+		{"missing director", `{"title":"T","castingDirector":"C","venue":"V","performanceDates":["2026-01-01"],"characters":["A"],"isLive":true}`, "director"},
+		{"missing castingDirector", `{"title":"T","director":"D","venue":"V","performanceDates":["2026-01-01"],"characters":["A"],"isLive":true}`, "castingDirector"},
+		{"missing venue", `{"title":"T","director":"D","castingDirector":"C","performanceDates":["2026-01-01"],"characters":["A"],"isLive":true}`, "venue"},
+		{"empty performanceDates", `{"title":"T","director":"D","castingDirector":"C","venue":"V","performanceDates":[],"characters":["A"],"isLive":true}`, "performanceDates"},
+		{"blank performance date", `{"title":"T","director":"D","castingDirector":"C","venue":"V","performanceDates":[" "],"characters":["A"],"isLive":true}`, "performanceDates"},
+		{"empty characters", `{"title":"T","director":"D","castingDirector":"C","venue":"V","performanceDates":["2026-01-01"],"characters":[],"isLive":true}`, "characters"},
+		{"blank character", `{"title":"T","director":"D","castingDirector":"C","venue":"V","performanceDates":["2026-01-01"],"characters":[" "],"isLive":true}`, "characters"},
+		{"missing isLive", `{"title":"T","director":"D","castingDirector":"C","venue":"V","performanceDates":["2026-01-01"],"characters":["A"]}`, "isLive"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &fakePutItemClient{}
+			handler := makeHandler(client, "PerformancesTable", nil)
+			result, err := handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: "POST", Body: testCase.body})
+			if err != nil {
+				t.Fatalf("handler returned an error: %v", err)
+			}
+			if result.StatusCode != 400 || !strings.Contains(result.Body, testCase.message) {
+				t.Fatalf("status/body = %d %s, want field-specific 400 containing %q", result.StatusCode, result.Body, testCase.message)
+			}
+			if client.input != nil {
+				t.Fatal("PutItem must not be called for invalid input")
+			}
+		})
+	}
+}
+
+func TestPostPerformanceLogsStartOutcomeAndComplete(t *testing.T) {
+	var buffer bytes.Buffer
+	originalLogger := logger
+	logger = slog.New(slog.NewJSONHandler(&buffer, nil))
+	t.Cleanup(func() { logger = originalLogger })
+
+	client := &fakePutItemClient{}
+	handler := makeHandler(client, "PerformancesTable", nil)
+	result, err := handler(context.Background(), events.APIGatewayProxyRequest{
+		HTTPMethod: "POST",
+		Body:       `{"title":"Our Town","director":"D","castingDirector":"C","venue":"V","performanceDates":["2026-01-01"],"characters":["Emily"],"isLive":true}`,
+	})
+	if err != nil || result.StatusCode != 200 {
+		t.Fatalf("handler result = %d %v", result.StatusCode, err)
+	}
+	logs := buffer.String()
+	for _, phase := range []string{`"phase":"start"`, `"phase":"outcome"`, `"phase":"complete"`} {
+		if !strings.Contains(logs, phase) {
+			t.Fatalf("logs missing %s: %s", phase, logs)
+		}
+	}
 }
 
 func assertRejected(t *testing.T, body string) {

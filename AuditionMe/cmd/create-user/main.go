@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -70,19 +71,19 @@ func makeHandler(client putItemAPI, tableName string, configErr error) func(cont
 			return response(400, ErrorResponse{Message: "Invalid request body: expected JSON"})
 		}
 
-		if request.Name == "" {
+		if strings.TrimSpace(request.Name) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: name"})
 		}
-		if request.Email == "" {
+		if strings.TrimSpace(request.Email) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: email"})
 		}
-		if request.Phone == "" {
+		if strings.TrimSpace(request.Phone) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: phone"})
 		}
-		if request.Role == "" {
+		if strings.TrimSpace(request.Role) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: role"})
 		}
-		if request.Password == "" {
+		if strings.TrimSpace(request.Password) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: password"})
 		}
 		if !validateEmail(request.Email) {
@@ -108,6 +109,14 @@ func makeHandler(client putItemAPI, tableName string, configErr error) func(cont
 			TableName: aws.String(tableName),
 			Item:      item,
 		}); err != nil {
+			log.Printf(
+				"DynamoDB PutItem failed: table=%q endpoint=%q region=%q error=%v",
+				tableName,
+				os.Getenv("DYNAMODB_ENDPOINT"),
+				os.Getenv("AWS_REGION"),
+				err,
+			)
+
 			return response(500, ErrorResponse{Message: "Failed to store user"})
 		}
 
@@ -154,10 +163,34 @@ func response(statusCode int, body any) (events.APIGatewayProxyResponse, error) 
 
 func main() {
 	tableName := os.Getenv("TABLE_NAME")
+
+	log.Printf(
+		"Starting CreateUser: table=%q endpoint=%q region=%q defaultRegion=%q",
+		tableName,
+		os.Getenv("DYNAMODB_ENDPOINT"),
+		os.Getenv("AWS_REGION"),
+		os.Getenv("AWS_DEFAULT_REGION"),
+	)
+
 	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Printf("AWS configuration failed: %v", err)
+	}
+
 	var client putItemAPI
 	if err == nil {
-		client = dynamodb.NewFromConfig(cfg)
+		client = newDynamoDBClient(cfg)
 	}
+
 	lambda.Start(makeHandler(client, tableName, err))
+}
+
+func newDynamoDBClient(cfg aws.Config) *dynamodb.Client {
+	endpoint := strings.TrimSpace(os.Getenv("DYNAMODB_ENDPOINT"))
+	if endpoint == "" {
+		return dynamodb.NewFromConfig(cfg)
+	}
+	return dynamodb.NewFromConfig(cfg, func(options *dynamodb.Options) {
+		options.BaseEndpoint = aws.String(endpoint)
+	})
 }

@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -16,21 +16,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
-	"github.com/google/uuid"
 )
 
 const (
 	pendingStatus = "pending"
-	signUpAction  = "sign_up_for_audition"
+	castStatus    = "cast"
+	castAction    = "cast_performer"
 )
 
 var logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-type SignUpRequest struct {
-	PerformanceID string `json:"performanceId"`
-	PerformerID   string `json:"performerId"`
-	CharacterName string `json:"characterName"`
+type CastPerformerRequest struct {
+	AuditionID string `json:"auditionId"`
 }
 
 type Audition struct {
@@ -41,14 +38,7 @@ type Audition struct {
 	Status        string `json:"status" dynamodbav:"status"`
 }
 
-type AuditionCreatedMessage struct {
-	EventType   string `json:"event_type"`
-	AuditionID  string `json:"auditionId"`
-	PerformerID string `json:"performerId"`
-	Timestamp   string `json:"timestamp"`
-}
-
-type SignUpResponse struct {
+type CastPerformerResponse struct {
 	Audition
 	Message string `json:"message"`
 }
@@ -57,50 +47,37 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
-type auditionDynamoDBAPI interface {
+type castDynamoDBAPI interface {
 	GetItem(context.Context, *dynamodb.GetItemInput, ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
-	PutItem(context.Context, *dynamodb.PutItemInput, ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	UpdateItem(context.Context, *dynamodb.UpdateItemInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
 }
 
-type sendMessageAPI interface {
-	SendMessage(context.Context, *sqs.SendMessageInput, ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
-}
-
-func makeHandler(dynamoClient auditionDynamoDBAPI, sqsClient sendMessageAPI, performancesTable string, auditionsTable string, queueURL string, configErr error) func(context.Context, events.APIGatewayProxyRequest) (result events.APIGatewayProxyResponse, handlerErr error) {
+func makeHandler(client castDynamoDBAPI, performancesTable string, auditionsTable string, configErr error) func(context.Context, events.APIGatewayProxyRequest) (result events.APIGatewayProxyResponse, handlerErr error) {
 	return func(ctx context.Context, event events.APIGatewayProxyRequest) (result events.APIGatewayProxyResponse, handlerErr error) {
 		outcome := "unhandled"
 		statusCode := 500
-		performanceID := ""
-		performerID := ""
+		performanceID := strings.TrimSpace(event.PathParameters["performanceId"])
 		auditionID := ""
 		logger.InfoContext(ctx, "Lambda invocation started",
-			"action", signUpAction,
+			"action", castAction,
 			"phase", "start",
 			"requestId", event.RequestContext.RequestID,
+			"performanceId", performanceID,
 		)
 		defer func() {
 			logger.InfoContext(ctx, "Lambda invocation completed",
-				"action", signUpAction,
+				"action", castAction,
 				"phase", "complete",
 				"outcome", outcome,
 				"statusCode", statusCode,
 				"performanceId", performanceID,
-				"performerId", performerID,
 				"auditionId", auditionID,
 			)
 		}()
 		finish := func(code int, resultOutcome string, body any, logValues ...any) (events.APIGatewayProxyResponse, error) {
 			outcome = resultOutcome
 			statusCode = code
-			values := []any{
-				"action", signUpAction,
-				"phase", "outcome",
-				"outcome", resultOutcome,
-				"statusCode", code,
-				"performanceId", performanceID,
-				"performerId", performerID,
-				"auditionId", auditionID,
-			}
+			values := []any{"action", castAction, "phase", "outcome", "outcome", resultOutcome, "statusCode", code, "performanceId", performanceID, "auditionId", auditionID}
 			values = append(values, logValues...)
 			if code >= 500 {
 				logger.ErrorContext(ctx, "Lambda invocation outcome", values...)
@@ -113,37 +90,30 @@ func makeHandler(dynamoClient auditionDynamoDBAPI, sqsClient sendMessageAPI, per
 		if event.HTTPMethod == "OPTIONS" {
 			return finish(200, "cors_preflight", map[string]string{"message": "CORS preflight OK"})
 		}
+		if performanceID == "" {
+			return finish(400, "validation_failed", ErrorResponse{Message: "Missing required path parameter: performanceId"}, "error", "performanceId is required")
+		}
 
 		body, bodyError := requestBody(event)
 		if bodyError != "" {
 			return finish(400, "validation_failed", ErrorResponse{Message: bodyError}, "error", bodyError)
 		}
-		var request SignUpRequest
+		var request CastPerformerRequest
 		if err := json.Unmarshal([]byte(body), &request); err != nil {
 			return finish(400, "validation_failed", ErrorResponse{Message: "Invalid request body: expected JSON"}, "error", err.Error())
 		}
-		performanceID = strings.TrimSpace(request.PerformanceID)
-		performerID = strings.TrimSpace(request.PerformerID)
-		request.CharacterName = strings.TrimSpace(request.CharacterName)
-		if performanceID == "" {
-			return finish(400, "validation_failed", ErrorResponse{Message: "Missing required field: performanceId"}, "error", "performanceId is required")
+		auditionID = strings.TrimSpace(request.AuditionID)
+		if auditionID == "" {
+			return finish(400, "validation_failed", ErrorResponse{Message: "Missing required field: auditionId"}, "error", "auditionId is required")
 		}
-		if performerID == "" {
-			return finish(400, "validation_failed", ErrorResponse{Message: "Missing required field: performerId"}, "error", "performerId is required")
-		}
-		if request.CharacterName == "" {
-			return finish(400, "validation_failed", ErrorResponse{Message: "Missing required field: characterName"}, "error", "characterName is required")
-		}
+
 		if performancesTable == "" {
 			return finish(500, "configuration_failed", ErrorResponse{Message: "Server configuration error: PERFORMANCES_TABLE_NAME is not set"}, "error", "PERFORMANCES_TABLE_NAME is not set")
 		}
 		if auditionsTable == "" {
 			return finish(500, "configuration_failed", ErrorResponse{Message: "Server configuration error: AUDITIONS_TABLE_NAME is not set"}, "error", "AUDITIONS_TABLE_NAME is not set")
 		}
-		if queueURL == "" {
-			return finish(500, "configuration_failed", ErrorResponse{Message: "Server configuration error: QUEUE_URL is not set"}, "error", "QUEUE_URL is not set")
-		}
-		if configErr != nil || dynamoClient == nil || sqsClient == nil {
+		if configErr != nil || client == nil {
 			errorMessage := "unable to initialize AWS"
 			if configErr != nil {
 				errorMessage = configErr.Error()
@@ -151,7 +121,7 @@ func makeHandler(dynamoClient auditionDynamoDBAPI, sqsClient sendMessageAPI, per
 			return finish(500, "configuration_failed", ErrorResponse{Message: "Server configuration error: unable to initialize AWS"}, "error", errorMessage)
 		}
 
-		performance, err := dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{
+		performanceResult, err := client.GetItem(ctx, &dynamodb.GetItemInput{
 			TableName: aws.String(performancesTable),
 			Key: map[string]types.AttributeValue{
 				"Id": &types.AttributeValueMemberS{Value: performanceID},
@@ -161,52 +131,73 @@ func makeHandler(dynamoClient auditionDynamoDBAPI, sqsClient sendMessageAPI, per
 		if err != nil {
 			return finish(500, "performance_read_failed", ErrorResponse{Message: "Failed to verify performance"}, "error", err.Error())
 		}
-		if len(performance.Item) == 0 {
+		if len(performanceResult.Item) == 0 {
 			message := "Performance '" + performanceID + "' not found"
 			return finish(404, "performance_not_found", ErrorResponse{Message: message}, "error", message)
 		}
 
-		audition := Audition{
-			ID:            uuid.NewString(),
-			PerformanceID: performanceID,
-			PerformerID:   performerID,
-			CharacterName: request.CharacterName,
-			Status:        pendingStatus,
+		auditionKey := map[string]types.AttributeValue{
+			"Id": &types.AttributeValueMemberS{Value: auditionID},
 		}
-		auditionID = audition.ID
-		item, err := attributevalue.MarshalMap(audition)
+		auditionResult, err := client.GetItem(ctx, &dynamodb.GetItemInput{
+			TableName:      aws.String(auditionsTable),
+			Key:            auditionKey,
+			ConsistentRead: aws.Bool(true),
+		})
 		if err != nil {
-			return finish(500, "audition_encode_failed", ErrorResponse{Message: "Failed to prepare audition for storage"}, "error", err.Error())
+			return finish(500, "audition_read_failed", ErrorResponse{Message: "Failed to read audition"}, "error", err.Error())
 		}
-		if _, err := dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
-			TableName: aws.String(auditionsTable),
-			Item:      item,
-		}); err != nil {
-			return finish(500, "audition_write_failed", ErrorResponse{Message: "Failed to store audition"}, "error", err.Error())
+		if len(auditionResult.Item) == 0 {
+			message := "Audition '" + auditionID + "' not found"
+			return finish(404, "audition_not_found", ErrorResponse{Message: message}, "error", message)
 		}
 
-		message := AuditionCreatedMessage{
-			EventType:   "audition_created",
-			AuditionID:  audition.ID,
-			PerformerID: audition.PerformerID,
-			Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+		var audition Audition
+		if err := attributevalue.UnmarshalMap(auditionResult.Item, &audition); err != nil {
+			return finish(500, "audition_decode_failed", ErrorResponse{Message: "Failed to read stored audition"}, "error", err.Error())
 		}
-		messageBody, err := json.Marshal(message)
-		if err != nil {
-			return finish(500, "notification_encode_failed", ErrorResponse{Message: "Audition was stored, but the notification message could not be prepared"}, "error", err.Error(), "auditionStored", true)
+		if audition.PerformanceID != performanceID {
+			message := "Audition does not belong to performance '" + performanceID + "'"
+			return finish(400, "performance_mismatch", ErrorResponse{Message: message}, "error", message)
 		}
-		if _, err := sqsClient.SendMessage(ctx, &sqs.SendMessageInput{
-			QueueUrl:    aws.String(queueURL),
-			MessageBody: aws.String(string(messageBody)),
-		}); err != nil {
-			return finish(500, "audition_stored_notification_failed", ErrorResponse{
-				Message: "Audition was stored, but the notification could not be queued",
-			}, "error", err.Error(), "auditionStored", true)
+		if audition.Status != pendingStatus {
+			message := "Audition status must be pending before casting"
+			return finish(409, "invalid_status_transition", ErrorResponse{Message: message}, "error", message, "currentStatus", audition.Status)
 		}
 
-		return finish(200, "audition_created_and_queued", SignUpResponse{
-			Audition: audition,
-			Message:  "Audition sign-up created successfully",
+		updatedResult, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName:           aws.String(auditionsTable),
+			Key:                 auditionKey,
+			UpdateExpression:    aws.String("SET #status = :cast"),
+			ConditionExpression: aws.String("#status = :pending"),
+			ExpressionAttributeNames: map[string]string{
+				"#status": "status",
+			},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":cast":    &types.AttributeValueMemberS{Value: castStatus},
+				":pending": &types.AttributeValueMemberS{Value: pendingStatus},
+			},
+			ReturnValues: types.ReturnValueAllNew,
+		})
+		if err != nil {
+			var conditionFailed *types.ConditionalCheckFailedException
+			if errors.As(err, &conditionFailed) {
+				return finish(409, "invalid_status_transition", ErrorResponse{Message: "Audition status must be pending before casting"}, "error", err.Error())
+			}
+			return finish(500, "update_failed", ErrorResponse{Message: "Failed to cast performer"}, "error", err.Error())
+		}
+		if len(updatedResult.Attributes) == 0 {
+			return finish(500, "updated_attributes_missing", ErrorResponse{Message: "Failed to read updated audition"}, "error", "UpdateItem returned no attributes")
+		}
+
+		var updatedAudition Audition
+		if err := attributevalue.UnmarshalMap(updatedResult.Attributes, &updatedAudition); err != nil {
+			return finish(500, "updated_audition_decode_failed", ErrorResponse{Message: "Failed to read updated audition"}, "error", err.Error())
+		}
+
+		return finish(200, "performer_cast", CastPerformerResponse{
+			Audition: updatedAudition,
+			Message:  "Performer cast successfully",
 		})
 	}
 }
@@ -246,15 +237,12 @@ func response(statusCode int, body any) (events.APIGatewayProxyResponse, error) 
 func main() {
 	performancesTable := os.Getenv("PERFORMANCES_TABLE_NAME")
 	auditionsTable := os.Getenv("AUDITIONS_TABLE_NAME")
-	queueURL := os.Getenv("QUEUE_URL")
 	cfg, err := config.LoadDefaultConfig(context.Background())
-	var dynamoClient auditionDynamoDBAPI
-	var sqsClient sendMessageAPI
+	var client castDynamoDBAPI
 	if err == nil {
-		dynamoClient = newDynamoDBClient(cfg)
-		sqsClient = newSQSClient(cfg)
+		client = newDynamoDBClient(cfg)
 	}
-	lambda.Start(makeHandler(dynamoClient, sqsClient, performancesTable, auditionsTable, queueURL, err))
+	lambda.Start(makeHandler(client, performancesTable, auditionsTable, err))
 }
 
 func newDynamoDBClient(cfg aws.Config) *dynamodb.Client {
@@ -263,16 +251,6 @@ func newDynamoDBClient(cfg aws.Config) *dynamodb.Client {
 		return dynamodb.NewFromConfig(cfg)
 	}
 	return dynamodb.NewFromConfig(cfg, func(options *dynamodb.Options) {
-		options.BaseEndpoint = aws.String(endpoint)
-	})
-}
-
-func newSQSClient(cfg aws.Config) *sqs.Client {
-	endpoint := strings.TrimSpace(os.Getenv("SQS_ENDPOINT"))
-	if endpoint == "" {
-		return sqs.NewFromConfig(cfg)
-	}
-	return sqs.NewFromConfig(cfg, func(options *sqs.Options) {
 		options.BaseEndpoint = aws.String(endpoint)
 	})
 }

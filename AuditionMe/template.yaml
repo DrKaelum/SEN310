@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AuditionMe Final Project SAM application
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Handler: bootstrap
+    Architectures:
+      - x86_64
+    Timeout: 10
+    Environment:
+      Variables:
+        DYNAMODB_ENDPOINT: ""
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin: "'*'"
+
+Resources:
+  CreateUserFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/create-user/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref UsersTable
+      Events:
+        CreateUserApi:
+          Type: Api
+          Properties:
+            Path: /api/users
+            Method: POST
+
+  GetUserProfileFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/get-user-profile/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UsersTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref UsersTable
+      Events:
+        GetUserProfileApi:
+          Type: Api
+          Properties:
+            Path: /api/users/{userId}
+            Method: GET
+
+  PostPerformanceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/post-performance/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PerformancesTable
+      Events:
+        PostPerformanceApi:
+          Type: Api
+          Properties:
+            Path: /api/performances
+            Method: POST
+
+  SearchPerformancesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/search-performances/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PerformancesTable
+      Events:
+        SearchPerformancesApi:
+          Type: Api
+          Properties:
+            Path: /api/performances
+            Method: GET
+
+  DeletePerformanceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/delete-performance/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PerformancesTable
+      Events:
+        DeletePerformanceApi:
+          Type: Api
+          Properties:
+            Path: /api/performances/{performanceId}
+            Method: DELETE
+
+  SignUpForAuditionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/sign-up-for-audition/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt NotificationQueue.QueueName
+      Environment:
+        Variables:
+          PERFORMANCES_TABLE_NAME: !Ref PerformancesTable
+          AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+          QUEUE_URL: !Ref NotificationQueue
+          SQS_ENDPOINT: ""
+      Events:
+        SignUpForAuditionApi:
+          Type: Api
+          Properties:
+            Path: /api/auditions
+            Method: POST
+
+  CastPerformerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/cast-performer/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+      Environment:
+        Variables:
+          PERFORMANCES_TABLE_NAME: !Ref PerformancesTable
+          AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+      Events:
+        CastPerformerApi:
+          Type: Api
+          Properties:
+            Path: /api/performances/{performanceId}/cast
+            Method: POST
+
+  GetUserAuditionsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/get-user-auditions/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref AuditionsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+          PERFORMANCES_TABLE_NAME: !Ref PerformancesTable
+      Events:
+        GetUserAuditionsApi:
+          Type: Api
+          Properties:
+            Path: /api/users/{userId}/auditions
+            Method: GET
+
+  NotifyDirectorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/notify-director/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+        - SQSPollerPolicy:
+            QueueName: !GetAtt NotificationQueue.QueueName
+      Environment:
+        Variables:
+          AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+      Events:
+        NotificationQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  UsersTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  PerformancesTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  AuditionsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 60
+
+Outputs:
+  ApiGatewayEndpoint:
+    Description: Base URL for the AuditionMe API
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod"

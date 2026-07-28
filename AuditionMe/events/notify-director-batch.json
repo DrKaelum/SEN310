@@ -1,0 +1,26 @@
+{
+  "Records": [
+    {
+      "messageId": "local-message-1",
+      "receiptHandle": "local-receipt-1",
+      "body": "{\"event_type\":\"audition_created\",\"auditionId\":\"audition-local-1\",\"performerId\":\"performer-local-1\",\"timestamp\":\"2026-07-28T12:00:00Z\"}",
+      "attributes": {},
+      "messageAttributes": {},
+      "md5OfBody": "local",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-2:000000000000:auditionme-notifications",
+      "awsRegion": "us-east-2"
+    },
+    {
+      "messageId": "local-message-2",
+      "receiptHandle": "local-receipt-2",
+      "body": "{\"event_type\":\"audition_created\",\"auditionId\":\"audition-local-2\",\"performerId\":\"performer-local-1\",\"timestamp\":\"2026-07-28T12:00:01Z\"}",
+      "attributes": {},
+      "messageAttributes": {},
+      "md5OfBody": "local",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-2:000000000000:auditionme-notifications",
+      "awsRegion": "us-east-2"
+    }
+  ]
+}

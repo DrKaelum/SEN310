@@ -1,0 +1,16 @@
+{
+  "httpMethod": "POST",
+  "path": "/api/performances/different-performance/cast",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "queryStringParameters": null,
+  "body": "{\"auditionId\":\"audition-local-1\"}",
+  "pathParameters": {
+    "performanceId": "different-performance"
+  },
+  "requestContext": {
+    "resourcePath": "/api/performances/{performanceId}/cast",
+    "httpMethod": "POST"
+  }
+}

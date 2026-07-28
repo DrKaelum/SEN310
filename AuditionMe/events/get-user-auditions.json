@@ -1,0 +1,14 @@
+{
+  "httpMethod": "GET",
+  "path": "/api/users/performer-local-1/auditions",
+  "headers": {},
+  "queryStringParameters": null,
+  "body": null,
+  "pathParameters": {
+    "userId": "performer-local-1"
+  },
+  "requestContext": {
+    "resourcePath": "/api/users/{userId}/auditions",
+    "httpMethod": "GET"
+  }
+}

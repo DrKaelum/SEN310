@@ -1,0 +1,189 @@
+# ============================================================================
+# REFERENCE ONLY -- not used by Module 05, not deployed for this class,
+# not something the instructor opens live. This is a freebie: if a student
+# wants to see what their OWN capstone's template.yaml should look like once
+# the SQS pipeline and structured logging are added, here it is.
+#
+# This is lab04/template.yaml (AuditionMe's five functions) with three
+# additions, each marked below:
+#   1. A NotificationQueue resource (new)
+#   2. SignUpForAuditionFunction gets one new Policy + one new env var
+#   3. A new NotifyDirectorFunction, SQS-triggered
+#
+# The Python code for those two functions is the same code taught in
+# Blocks 2-3 (sign_up_for_audition/app.py, notify_director/app.py) -- no
+# code changes are needed to go from the mod05 sandbox to this. Only the
+# template.yaml declaration differs, because the mod05 sandbox uses
+# explicit mod05-prefixed names for teaching isolation, and a real capstone
+# lets CloudFormation name everything itself, same as Lab 4 already does.
+# ============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AuditionMe -- Final Project reference.
+  Lab 4's five functions, plus the SQS notification pipeline and structured
+  logging pieces from Module 05.
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 10
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin: "'*'"
+
+Resources:
+
+  # ── DynamoDB Tables (unchanged from Lab 4) ─────────────────────────────
+
+  UsersTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  PerformancesTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  AuditionsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: Id
+        Type: String
+
+  # ── SQS Queue -- NEW in Module 05 ──────────────────────────────────────
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+
+  # ── Lambda Functions ────────────────────────────────────────────────
+
+  CreateUserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: create_user/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref UsersTable
+      Events:
+        CreateUserApi:
+          Type: Api
+          Properties:
+            Path: /api/users
+            Method: POST
+
+  PostPerformanceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: post_performance/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          PERFORMANCES_TABLE: !Ref PerformancesTable
+      Events:
+        PostPerformanceApi:
+          Type: Api
+          Properties:
+            Path: /api/performances
+            Method: POST
+
+  SearchPerformancesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: search_performances/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          PERFORMANCES_TABLE: !Ref PerformancesTable
+      Events:
+        SearchPerformancesApi:
+          Type: Api
+          Properties:
+            Path: /api/performances
+            Method: GET
+
+  SignUpForAuditionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: sign_up_for_audition/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+        - SQSSendMessagePolicy:                        # <-- NEW (Module 05)
+            QueueName: !GetAtt NotificationQueue.QueueName
+      Environment:
+        Variables:
+          PERFORMANCES_TABLE: !Ref PerformancesTable
+          AUDITIONS_TABLE: !Ref AuditionsTable
+          QUEUE_URL: !Ref NotificationQueue             # <-- NEW (Module 05)
+      Events:
+        SignUpForAuditionApi:
+          Type: Api
+          Properties:
+            Path: /api/auditions
+            Method: POST
+
+  CastPerformerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: cast_performer/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+      Environment:
+        Variables:
+          AUDITIONS_TABLE: !Ref AuditionsTable
+      Events:
+        CastPerformerApi:
+          Type: Api
+          Properties:
+            Path: /api/performances/{performanceId}/cast
+            Method: POST
+
+  NotifyDirectorFunction:                               # <-- NEW (Module 05)
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: notify_director/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+      Environment:
+        Variables:
+          AUDITIONS_TABLE: !Ref AuditionsTable
+      Events:
+        NotificationQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+
+Outputs:
+  ApiUrl:
+    Description: "AuditionMe API Gateway endpoint URL"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  NotificationQueueUrl:
+    Value: !Ref NotificationQueue

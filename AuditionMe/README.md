@@ -1,337 +1,462 @@
-# AuditionMe Lab 3 - Go Lambda DynamoDB Persistence
+# AuditionMe Final Project
 
-This project uses Go instead of the Python shown in the assignment. The instructor approved Go for the class. The Python `boto3` DynamoDB calls are implemented with the AWS SDK for Go v2. Every Lambda deployment package uses the AWS Lambda `provided.al2023` custom runtime and contains one executable named `bootstrap`.
+AuditionMe is one AWS SAM application containing nine Go Lambda functions,
+three DynamoDB tables, one SQS Standard Queue, and eight HTTP API routes. It
+extends the working Lab 4 application and does not use an authorizer.
 
-The Lab 2 TOKEN authorizer remains unchanged and must stay attached to `POST /api/users`.
+Every Lambda uses:
 
-## DynamoDB Tables
+- Go with AWS SDK for Go v2
+- `Runtime: provided.al2023`
+- `Handler: bootstrap`
+- `Metadata: BuildMethod: go1.x`
+- `Architectures: [x86_64]`
+- An independent Go module in its own `cmd/` directory
 
-Create these three tables in the same AWS Region as the Lambda functions:
+CloudFormation generates all physical table names and the queue URL. SAM passes
+those values into the functions through environment variables.
 
-| Table | Partition key | Capacity mode |
-|---|---|---|
-| `AuditionMe_Users_davian` | `Id` (String) | On-demand |
-| `AuditionMe_Performances_davian` | `Id` (String) | On-demand |
-| `AuditionMe_Auditions_davian` | `Id` (String) | On-demand |
+## Functions and triggers
 
-In the DynamoDB console, choose **Create table**, enter the exact table name, set the partition key to `Id` with type String, select **On-demand**, and create the table. No sort key or secondary index is required.
+| Lambda | Trigger |
+|---|---|
+| CreateUserFunction | `POST /api/users` |
+| GetUserProfileFunction | `GET /api/users/{userId}` |
+| PostPerformanceFunction | `POST /api/performances` |
+| SearchPerformancesFunction | `GET /api/performances` |
+| DeletePerformanceFunction | `DELETE /api/performances/{performanceId}` |
+| SignUpForAuditionFunction | `POST /api/auditions` |
+| CastPerformerFunction | `POST /api/performances/{performanceId}/cast` |
+| GetUserAuditionsFunction | `GET /api/users/{userId}/auditions` |
+| NotifyDirectorFunction | SQS only; no API route |
 
-The suffixed names are intentional. The assignment overview shows unsuffixed names, while the rubric refers to `AuditionMe_Performances_[yourname]`.
+The SQS workflow is:
 
-## Lambda Functions and Environment Variables
+1. Sign-up validates the request and verifies the performance.
+2. It writes a pending audition.
+3. It publishes one `audition_created` message.
+4. SQS invokes NotifyDirector in batches of up to 10.
+5. NotifyDirector processes every record and sets `notified=true`.
+6. Failed records are returned with `ReportBatchItemFailures`; successful
+   records are not retried.
 
-Create or update these functions:
+Structured JSON lifecycle logs are produced by PostPerformance,
+SignUpForAudition, CastPerformer, and NotifyDirector. Each invocation includes
+`phase=start`, `phase=outcome`, and `phase=complete`.
 
-| Lambda function | Source | Environment variables |
-|---|---|---|
-| `auditionme_create_user_davian` | `cmd/create-user` | `TABLE_NAME=AuditionMe_Users_davian` |
-| `auditionme_post_performance_davian` | `cmd/post-performance` | `TABLE_NAME=AuditionMe_Performances_davian` |
-| `auditionme_search_performances_davian` | `cmd/search-performances` | `TABLE_NAME=AuditionMe_Performances_davian` |
-| `auditionme_sign_up_for_audition_davian` | `cmd/sign-up-for-audition` | `PERFORMANCES_TABLE_NAME=AuditionMe_Performances_davian`, `AUDITIONS_TABLE_NAME=AuditionMe_Auditions_davian` |
-| Existing Lab 2 authorizer | `cmd/authorizer` | No change |
+## Run all nine unit-test suites
 
-For each persistence Lambda:
-
-- Runtime: `provided.al2023`
-- Architecture: `x86_64`
-- Handler: `bootstrap`
-- Deployment package: the matching ZIP under `build/`
-
-The handlers return a clear `500` configuration response if a required table-name variable is missing. They never fall back to a different table.
-
-## Exact DynamoDB IAM Policies
-
-Keep the normal `AWSLambdaBasicExecutionRole` permissions for CloudWatch Logs. Add only the applicable DynamoDB policy below to each Lambda execution role. Replace `REGION` and `ACCOUNT_ID` with the deployment values. Do not use `AmazonDynamoDBFullAccess`, `dynamodb:*`, or a wildcard resource.
-
-### Create-user: Users PutItem only
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "dynamodb:PutItem",
-      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/AuditionMe_Users_davian"
-    }
-  ]
-}
-```
-
-### Post-performance: Performances PutItem only
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "dynamodb:PutItem",
-      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/AuditionMe_Performances_davian"
-    }
-  ]
-}
-```
-
-### Search-performances: Performances Scan only
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "dynamodb:Scan",
-      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/AuditionMe_Performances_davian"
-    }
-  ]
-}
-```
-
-### Sign-up-for-audition: exact two-table access
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ReadPerformanceById",
-      "Effect": "Allow",
-      "Action": "dynamodb:GetItem",
-      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/AuditionMe_Performances_davian"
-    },
-    {
-      "Sid": "CreateAudition",
-      "Effect": "Allow",
-      "Action": "dynamodb:PutItem",
-      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/AuditionMe_Auditions_davian"
-    }
-  ]
-}
-```
-
-The sign-up role must have no other DynamoDB permissions from inline policies, customer-managed policies, or AWS-managed DynamoDB policies. It requires exactly `GetItem` on Performances and `PutItem` on Auditions.
-
-## Local Tests
-
-From the `AuditionMe` directory, run:
+From the `AuditionMe` directory:
 
 ```bash
-go test ./...
+for module_dir in \
+  cmd/create-user \
+  cmd/get-user-profile \
+  cmd/post-performance \
+  cmd/search-performances \
+  cmd/delete-performance \
+  cmd/sign-up-for-audition \
+  cmd/cast-performer \
+  cmd/get-user-auditions \
+  cmd/notify-director
+do
+  (cd "$module_dir" && go test ./...) || exit 1
+done
 ```
 
-The focused fake-client tests verify the item fields, password exclusion, required `isLive`, empty-list validation, filtered and unfiltered scans, scan pagination, the missing-performance 404 path, no write after a missing performance, GetItem-before-PutItem ordering, and `status: pending`.
-
-## Build Deployment ZIPs
-
-Run these commands from the `AuditionMe` directory on Linux or WSL:
+Run vet the same way:
 
 ```bash
-mkdir -p build/create-user build/post-performance build/search-performances build/sign-up-for-audition
-
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o build/create-user/bootstrap ./cmd/create-user
-zip -j -FS build/create-user/create-user.zip build/create-user/bootstrap
-
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o build/post-performance/bootstrap ./cmd/post-performance
-zip -j -FS build/post-performance/post-performance.zip build/post-performance/bootstrap
-
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o build/search-performances/bootstrap ./cmd/search-performances
-zip -j -FS build/search-performances/search-performances.zip build/search-performances/bootstrap
-
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o build/sign-up-for-audition/bootstrap ./cmd/sign-up-for-audition
-zip -j -FS build/sign-up-for-audition/sign-up-for-audition.zip build/sign-up-for-audition/bootstrap
+for module_dir in \
+  cmd/create-user \
+  cmd/get-user-profile \
+  cmd/post-performance \
+  cmd/search-performances \
+  cmd/delete-performance \
+  cmd/sign-up-for-audition \
+  cmd/cast-performer \
+  cmd/get-user-auditions \
+  cmd/notify-director
+do
+  (cd "$module_dir" && go vet ./...) || exit 1
+done
 ```
 
-Verify that every archive contains exactly one root-level `bootstrap`:
+Format all deployed modules:
 
 ```bash
-unzip -Z1 build/create-user/create-user.zip
-unzip -Z1 build/post-performance/post-performance.zip
-unzip -Z1 build/search-performances/search-performances.zip
-unzip -Z1 build/sign-up-for-audition/sign-up-for-audition.zip
+gofmt -w \
+  cmd/create-user/*.go \
+  cmd/get-user-profile/*.go \
+  cmd/post-performance/*.go \
+  cmd/search-performances/*.go \
+  cmd/delete-performance/*.go \
+  cmd/sign-up-for-audition/*.go \
+  cmd/cast-performer/*.go \
+  cmd/get-user-auditions/*.go \
+  cmd/notify-director/*.go
 ```
 
-The old `build/list-performances/bootstrap` is a Lab 2 hardcoded artifact. Do not upload or submit it as the Lab 3 search Lambda.
+## Validate and build
 
-## API Gateway REST API
-
-Continue using the existing REST API and Lambda proxy integrations:
-
-| Method and resource | Lambda integration | Authorization |
-|---|---|---|
-| `POST /api/users` | `auditionme_create_user_davian` | Existing TOKEN authorizer retained |
-| `POST /api/performances` | `auditionme_post_performance_davian` | None required by this assignment |
-| `GET /api/performances` | `auditionme_search_performances_davian` | Preserve existing public behavior |
-| `POST /api/auditions` | `auditionme_sign_up_for_audition_davian` | None required by this assignment |
-
-Keep Lambda proxy integration enabled. Add or confirm OPTIONS support for `/api/users`, `/api/performances`, and `/api/auditions`. Every Lambda-generated response includes CORS headers. For CORS on errors produced by API Gateway before a Lambda runs, also configure the REST API Gateway Responses for unauthorized, access-denied, default 4XX, and default 5XX responses.
-
-After changing integrations or methods, deploy the REST API again to the existing `dev` stage.
-
-## Safe Deployment Order
-
-1. Create the three DynamoDB tables.
-2. Deploy create-user, set its environment variable and narrow IAM policy, then verify the existing authorized user request.
-3. Deploy post-performance, configure IAM, and add `POST /api/performances`.
-4. Create at least one live and one non-live performance.
-5. Deploy search-performances and configure IAM.
-6. Change `GET /api/performances` from the hardcoded Lab 2 Lambda to search-performances, redeploy, and verify both GET cases.
-7. Deploy sign-up-for-audition with its two environment variables and exact two-statement DynamoDB policy.
-8. Add `POST /api/auditions`, redeploy, and run both sign-up tests.
-9. Keep the old deployed list Lambda only until the DynamoDB-backed GET is confirmed; there is no data to migrate because its records were compiled Go literals.
-
-## Bruno End-to-End Requests
-
-Create a Bruno environment variable named `baseUrl` containing the deployed stage URL, for example:
-
-```text
-https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/dev
+```bash
+sam validate --lint
+sam build --use-container
 ```
 
-Use `Content-Type: application/json` on each POST. The two user requests also require the existing Lab 2 authorizer header.
+If dependency downloads in the build container are slow:
 
-### 1. Create a performer
-
-```http
-POST {{baseUrl}}/api/users
-Authorization: Bearer AuditionMe-2026.performer
-Content-Type: application/json
-
-{
-  "name": "Avery Stone",
-  "email": "avery@example.com",
-  "phone": "555-0101",
-  "role": "performer",
-  "password": "performer-password"
-}
+```bash
+sam build --use-container \
+  --container-env-var GOPROXY=https://proxy.golang.org,direct
 ```
 
-Save the returned `Id` as `performerId`.
+Each of the nine built function directories under `.aws-sam/build/` must
+contain an executable root-level `bootstrap`.
 
-### 2. Create a director
+## Local DynamoDB and SQS
 
-```http
-POST {{baseUrl}}/api/users
-Authorization: Bearer AuditionMe-2026.director
-Content-Type: application/json
+SAM Local emulates Lambda and API Gateway, but it does not create DynamoDB
+tables and it does not run an SQS event-source poller. DynamoDB Local provides
+the three tables. LocalStack provides only the local SQS endpoint.
 
-{
-  "name": "Morgan Lee",
-  "email": "morgan@example.com",
-  "phone": "555-0102",
-  "role": "director",
-  "password": "director-password"
-}
+Create a shared Docker network:
+
+```bash
+docker network create auditionme-local
 ```
 
-### 3. Create a live performance
+Start DynamoDB Local:
 
-```http
-POST {{baseUrl}}/api/performances
-Content-Type: application/json
-
-{
-  "title": "The Glass Menagerie",
-  "director": "Morgan Lee",
-  "castingDirector": "Jordan Rivera",
-  "venue": "AuditionMe Black Box Theatre",
-  "performanceDates": ["2026-08-14", "2026-08-15"],
-  "characters": ["Amanda", "Laura", "Tom"],
-  "isLive": true
-}
+```bash
+docker run --detach \
+  --name auditionme-dynamodb \
+  --network auditionme-local \
+  --publish 8000:8000 \
+  amazon/dynamodb-local:latest \
+  -jar DynamoDBLocal.jar -sharedDb -inMemory
 ```
 
-Save the returned `Id` as `performanceId`.
+Start LocalStack with SQS:
 
-### 4. Search all performances
-
-```http
-GET {{baseUrl}}/api/performances
+```bash
+docker run --detach \
+  --name auditionme-localstack \
+  --network auditionme-local \
+  --publish 4566:4566 \
+  --env SERVICES=sqs \
+  localstack/localstack:latest
 ```
 
-Expected response wrapper:
+Use dummy local credentials for the following commands:
 
-```json
-{
-  "performances": []
-}
+```bash
+export AWS_ACCESS_KEY_ID=local
+export AWS_SECRET_ACCESS_KEY=local
+export AWS_DEFAULT_REGION=us-east-2
 ```
 
-The real response contains the saved performances. DynamoDB does not guarantee their order.
+Create the queue:
 
-### 5. Search live performances
-
-```http
-GET {{baseUrl}}/api/performances?live=true
+```bash
+aws sqs create-queue \
+  --queue-name auditionme-notifications \
+  --attributes VisibilityTimeout=60 \
+  --endpoint-url http://localhost:4566
 ```
 
-Only records whose `isLive` value is `true` should appear.
+`events/env.local.json` uses the container-visible queue URL
+`http://auditionme-localstack:4566/000000000000/auditionme-notifications`.
+`SQS_ENDPOINT` is blank in deployed AWS and overridden only for local work.
 
-### 6. Valid audition sign-up
+Create the three local tables:
 
-```http
-POST {{baseUrl}}/api/auditions
-Content-Type: application/json
+```bash
+aws dynamodb create-table \
+  --table-name UsersTable \
+  --attribute-definitions AttributeName=Id,AttributeType=S \
+  --key-schema AttributeName=Id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url http://localhost:8000
 
-{
-  "performanceId": "{{performanceId}}",
-  "performerId": "{{performerId}}",
-  "characterName": "Laura"
-}
+aws dynamodb create-table \
+  --table-name PerformancesTable \
+  --attribute-definitions AttributeName=Id,AttributeType=S \
+  --key-schema AttributeName=Id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url http://localhost:8000
+
+aws dynamodb create-table \
+  --table-name AuditionsTable \
+  --attribute-definitions AttributeName=Id,AttributeType=S \
+  --key-schema AttributeName=Id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url http://localhost:8000
 ```
 
-Expected status: `200`. The returned and stored audition must contain:
+## Local test data
 
-```json
-{
-  "status": "pending"
-}
+Seed at least two items per table. This supports profile, history, cast, delete,
+batch-consumer, and screenshot preparation tests.
+
+```bash
+aws dynamodb put-item \
+  --table-name UsersTable \
+  --item '{"Id":{"S":"performer-local-1"},"name":{"S":"Avery Stone"},"email":{"S":"avery@example.com"},"phone":{"S":"555-0101"},"role":{"S":"performer"},"created_at":{"S":"2026-07-28T12:00:00Z"}}' \
+  --endpoint-url http://localhost:8000
+
+aws dynamodb put-item \
+  --table-name UsersTable \
+  --item '{"Id":{"S":"director-local-1"},"name":{"S":"Dana Lee"},"email":{"S":"dana@example.com"},"phone":{"S":"555-0102"},"role":{"S":"director"},"created_at":{"S":"2026-07-28T12:01:00Z"}}' \
+  --endpoint-url http://localhost:8000
+
+aws dynamodb put-item \
+  --table-name PerformancesTable \
+  --item '{"Id":{"S":"performance-local-1"},"title":{"S":"Our Town"},"director":{"S":"Dana Lee"},"castingDirector":{"S":"Morgan Ray"},"venue":{"S":"Main Stage"},"performanceDates":{"L":[{"S":"2026-09-01"}]},"characters":{"L":[{"S":"Emily"},{"S":"Laura"}]},"isLive":{"BOOL":true}}' \
+  --endpoint-url http://localhost:8000
+
+aws dynamodb put-item \
+  --table-name PerformancesTable \
+  --item '{"Id":{"S":"performance-delete-local"},"title":{"S":"Hamlet"},"director":{"S":"Dana Lee"},"castingDirector":{"S":"Morgan Ray"},"venue":{"S":"Black Box"},"performanceDates":{"L":[{"S":"2026-10-01"}]},"characters":{"L":[{"S":"Hamlet"},{"S":"Ophelia"}]},"isLive":{"BOOL":true}}' \
+  --endpoint-url http://localhost:8000
+
+aws dynamodb put-item \
+  --table-name AuditionsTable \
+  --item '{"Id":{"S":"audition-local-1"},"performanceId":{"S":"performance-local-1"},"performerId":{"S":"performer-local-1"},"characterName":{"S":"Emily"},"status":{"S":"pending"}}' \
+  --endpoint-url http://localhost:8000
+
+aws dynamodb put-item \
+  --table-name AuditionsTable \
+  --item '{"Id":{"S":"audition-local-2"},"performanceId":{"S":"performance-local-1"},"performerId":{"S":"performer-local-1"},"characterName":{"S":"Laura"},"status":{"S":"pending"}}' \
+  --endpoint-url http://localhost:8000
 ```
 
-### 7. Invalid performance 404
+## SAM local invoke
 
-```http
-POST {{baseUrl}}/api/auditions
-Content-Type: application/json
+Build first. Then invoke each function with the shared Docker network:
 
-{
-  "performanceId": "performance-does-not-exist",
-  "performerId": "{{performerId}}",
-  "characterName": "Laura"
-}
+```bash
+sam local invoke CreateUserFunction \
+  --event events/create-user.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+
+sam local invoke GetUserProfileFunction \
+  --event events/get-user-profile.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+
+sam local invoke PostPerformanceFunction \
+  --event events/post-performance.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+
+sam local invoke SearchPerformancesFunction \
+  --event events/search-performances.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+
+sam local invoke DeletePerformanceFunction \
+  --event events/delete-performance.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+
+sam local invoke SignUpForAuditionFunction \
+  --event events/sign-up-for-audition.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+
+sam local invoke CastPerformerFunction \
+  --event events/cast-performer.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+
+sam local invoke GetUserAuditionsFunction \
+  --event events/get-user-auditions.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+
+sam local invoke NotifyDirectorFunction \
+  --event events/notify-director.json \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
 ```
 
-Expected status: `404`, with a clear response such as:
+Additional missing-resource, duplicate-cast, invalid-message, and batch event
+files are in `events/`.
 
-```json
-{
-  "message": "Performance 'performance-does-not-exist' not found"
-}
+## Manual local SQS handoff
+
+Invoke SignUpForAudition, then inspect the actual local message:
+
+```bash
+aws sqs receive-message \
+  --queue-url http://localhost:4566/000000000000/auditionme-notifications \
+  --max-number-of-messages 10 \
+  --visibility-timeout 30 \
+  --endpoint-url http://localhost:4566
 ```
 
-Confirm that this request did not add an Auditions record.
+Copy each returned `MessageId` and `Body` into an `events.SQSEvent` envelope
+using `events/notify-director.json` as the shape, then invoke
+NotifyDirectorFunction. Finally confirm the record:
 
-## Verify `status: pending`
+```bash
+aws dynamodb get-item \
+  --table-name AuditionsTable \
+  --key '{"Id":{"S":"audition-local-1"}}' \
+  --consistent-read \
+  --endpoint-url http://localhost:8000
+```
 
-After the valid sign-up:
+The item must contain `"notified": {"BOOL": true}`. SAM Local does not
+automatically move the LocalStack message into the consumer; that manual
+envelope is the local equivalent of the deployed event-source mapping.
 
-1. Open DynamoDB in the AWS console.
-2. Open `AuditionMe_Auditions_davian`.
-3. Choose **Explore table items**.
-4. Locate the item whose `Id` matches the sign-up response.
-5. Confirm that `performanceId`, `performerId`, and `characterName` match the request.
-6. Confirm the item contains the String attribute `status` with the exact lowercase value `pending`.
+## Local API Gateway
 
-## Submission Screenshot Checklist
+```bash
+sam local start-api \
+  --env-vars events/env.local.json \
+  --docker-network auditionme-local
+```
 
-- `AuditionMe_Users_davian` table configuration showing `Id` as a String partition key
-- Users table containing the performer and director, with no password attribute
-- `AuditionMe_Performances_davian` table configuration and populated item
-- Performances item showing both lists and the Boolean `isLive`
-- `AuditionMe_Auditions_davian` table configuration and populated valid audition
-- Audition item clearly showing `status: pending`
-- Bruno valid sign-up request and `200` response
-- Bruno invalid `performanceId` request and `404` response
-- GET all and GET `?live=true` results
-- Sign-up Lambda role showing exactly GetItem on Performances and PutItem on Auditions, with no broader DynamoDB policy
-- Exported Bruno collection containing the complete end-to-end flow
+Test the eight routes at `http://localhost:3000`. No route needs an
+Authorization header.
+
+When finished:
+
+```bash
+docker stop auditionme-dynamodb auditionme-localstack
+docker rm auditionme-dynamodb auditionme-localstack
+docker network rm auditionme-local
+```
+
+## Deploy
+
+```bash
+sam deploy --guided
+```
+
+Use the same AWS profile and region throughout. Save the generated
+configuration if desired. Use the `ApiGatewayEndpoint` CloudFormation output
+as the Postman/Bruno `baseUrl`.
+
+After deployment:
+
+1. Confirm CloudFormation completed successfully.
+2. Confirm the API has eight application methods.
+3. Confirm NotifyDirector has the SQS trigger and no API trigger.
+4. Run the complete live workflow.
+5. Check the audition item for `notified=true`.
+6. Check CloudWatch for structured JSON logs from SignUpForAudition and
+   NotifyDirector.
+
+## Complete 12-request Postman/Bruno flow
+
+Use environment variables `baseUrl`, `directorId`, `performerId`,
+`performanceId`, and `auditionId`.
+
+1. `POST /api/users` to create a director; save `Id` as `directorId`.
+2. `POST /api/users` to create a performer; save `Id` as `performerId`.
+3. `POST /api/performances` to create Hamlet; save `Id` as `performanceId`.
+4. `GET /api/performances`; confirm Hamlet appears.
+5. `GET /api/performances?live=true`; confirm Hamlet appears.
+6. `POST /api/auditions`; save `Id` as `auditionId`.
+7. `POST /api/performances/{performanceId}/cast`; expect `200` and `cast`.
+8. Repeat the cast; expect `409`.
+9. `GET /api/users/{performerId}/auditions`; confirm `performanceTitle`.
+10. `GET /api/users/{performerId}`; confirm the complete profile.
+11. `DELETE /api/performances/{performanceId}`; expect `200`.
+12. `GET /api/performances`; confirm Hamlet is gone.
+
+Between requests 6 and 7, verify the asynchronous pipeline:
+
+- The queue's `NumberOfMessagesSent` metric increased.
+- NotifyDirector CloudWatch logs show receipt and `marked_notified`.
+- The audition item contains DynamoDB boolean `notified=true`.
+
+The collection should also include optional validation cases, the missing
+performance sign-up, and the duplicate cast.
+
+## Screenshot data preparation
+
+The rubric requires at least two items in every table, while the primary
+workflow creates only one performance and one audition. Before screenshots:
+
+1. Create two users.
+2. Create at least two performances.
+3. Create at least two auditions.
+4. Confirm both auditions become notified.
+5. Capture table screenshots before deleting the showcased performance, or
+   create another performance so at least two remain afterward.
+
+## Required eight screenshots
+
+1. CloudFormation stack and resources.
+2. API Gateway resource tree with all eight application routes.
+3. Users table with at least two items.
+4. Performances table with at least two items.
+5. Auditions table with at least two items, including `notified=true`.
+6. SQS delivery evidence.
+7. NotifyDirector structured CloudWatch logs.
+8. Structured start/outcome/complete logs from another Lambda.
+
+An enabled SQS consumer may remove a message before the SQS message browser can
+display it. First prove the pipeline normally. Prefer durable queue metrics and
+CloudWatch logs. If the instructor strictly requires a visible message body:
+
+1. Temporarily disable the deployed event-source mapping.
+2. Create one new audition.
+3. Poll the queue and capture the body.
+4. Immediately re-enable the mapping.
+5. Verify that the audition becomes notified.
+6. Confirm the mapping is enabled before final screenshots and submission.
+
+Do not modify `template.yaml` to leave the consumer disabled.
+
+## Two-minute demo preparation
+
+Before recording, open:
+
+- The live Postman/Bruno collection with the Prod `baseUrl`
+- The Auditions table item view
+- SQS monitoring
+- NotifyDirector CloudWatch logs
+
+Show the live API, sign-up, `notified=true`, consumer logs, successful cast,
+duplicate `409`, enriched history, profile lookup, delete, and final search.
+Preload tabs and variables so the asynchronous proof fits within two minutes.
+
+## Submission archive
+
+Build the zip from an explicit allowlist. Include:
+
+- `template.yaml`
+- `README.md`
+- These nine function directories only
+- `events/`
+- Exported Postman collection
+- Required screenshots
+
+Exclude:
+
+- `cmd/authorizer/`
+- `cmd/list-performances/`
+- `build/`
+- Root `bootstrap`
+- `.aws-sam/`
+- Local DynamoDB data
+- Credentials
+
+The old authorizer and list-performances sources are historical only and are
+not deployed by the template.
+
+Do not delete the deployed stack until the instructor has finished grading.
+After receiving the grade:
+
+```bash
+sam delete --stack-name YOUR_STACK_NAME
+```
+
+Capture the successful deletion screenshot for the final requirement.

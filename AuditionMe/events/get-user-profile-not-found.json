@@ -1,0 +1,14 @@
+{
+  "httpMethod": "GET",
+  "path": "/api/users/user-does-not-exist",
+  "headers": {},
+  "queryStringParameters": null,
+  "body": null,
+  "pathParameters": {
+    "userId": "user-does-not-exist"
+  },
+  "requestContext": {
+    "resourcePath": "/api/users/{userId}",
+    "httpMethod": "GET"
+  }
+}

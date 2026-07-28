@@ -1,0 +1,3 @@
+# boto3 is pre-installed in the Lambda runtime.
+# Include here for local development only.
+boto3

@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: AuditionMe Lab 4 SAM application
 
@@ -9,6 +9,9 @@ Globals:
     Architectures:
       - x86_64
     Timeout: 10
+    Environment:
+      Variables:
+        DYNAMODB_ENDPOINT: ""
   Api:
     Cors:
       AllowMethods: "'GET,POST,OPTIONS'"

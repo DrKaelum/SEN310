@@ -1,0 +1,14 @@
+{
+  "httpMethod": "DELETE",
+  "path": "/api/performances/performance-does-not-exist",
+  "headers": {},
+  "queryStringParameters": null,
+  "body": null,
+  "pathParameters": {
+    "performanceId": "performance-does-not-exist"
+  },
+  "requestContext": {
+    "resourcePath": "/api/performances/{performanceId}",
+    "httpMethod": "DELETE"
+  }
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -68,5 +69,49 @@ func TestCreateUserMissingTableNameReturns500WithoutWrite(t *testing.T) {
 	}
 	if client.input != nil {
 		t.Fatal("PutItem must not be called when TABLE_NAME is missing")
+	}
+}
+
+func TestCreateUserRejectsEveryInvalidPostShape(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		message string
+	}{
+		{"missing body", "", "Missing request body"},
+		{"invalid JSON", "{", "Invalid request body"},
+		{"missing name", `{"email":"a@example.com","phone":"555","role":"performer","password":"secret"}`, "name"},
+		{"missing email", `{"name":"A","phone":"555","role":"performer","password":"secret"}`, "email"},
+		{"missing phone", `{"name":"A","email":"a@example.com","role":"performer","password":"secret"}`, "phone"},
+		{"missing role", `{"name":"A","email":"a@example.com","phone":"555","password":"secret"}`, "role"},
+		{"missing password", `{"name":"A","email":"a@example.com","phone":"555","role":"performer"}`, "password"},
+		{"blank name", `{"name":" ","email":"a@example.com","phone":"555","role":"performer","password":"secret"}`, "name"},
+		{"blank phone", `{"name":"A","email":"a@example.com","phone":" ","role":"performer","password":"secret"}`, "phone"},
+		{"blank password", `{"name":"A","email":"a@example.com","phone":"555","role":"performer","password":" "}`, "password"},
+		{"invalid email", `{"name":"A","email":"invalid","phone":"555","role":"performer","password":"secret"}`, "Invalid email"},
+		{"invalid role", `{"name":"A","email":"a@example.com","phone":"555","role":"admin","password":"secret"}`, "Invalid role"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &fakePutItemClient{}
+			handler := makeHandler(client, "UsersTable", nil)
+			result, err := handler(context.Background(), events.APIGatewayProxyRequest{
+				HTTPMethod: "POST",
+				Body:       testCase.body,
+			})
+			if err != nil {
+				t.Fatalf("handler returned an error: %v", err)
+			}
+			if result.StatusCode != 400 {
+				t.Fatalf("status = %d, want 400; body = %s", result.StatusCode, result.Body)
+			}
+			if !strings.Contains(result.Body, testCase.message) {
+				t.Fatalf("body = %s, want field-specific text %q", result.Body, testCase.message)
+			}
+			if client.input != nil {
+				t.Fatal("PutItem must not be called for invalid input")
+			}
+		})
 	}
 }

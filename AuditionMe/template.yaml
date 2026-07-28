@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: AuditionMe Lab 4 SAM application
+Description: AuditionMe Final Project SAM application
 
 Globals:
   Function:
@@ -14,7 +14,7 @@ Globals:
         DYNAMODB_ENDPOINT: ""
   Api:
     Cors:
-      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowMethods: "'GET,POST,DELETE,OPTIONS'"
       AllowHeaders: "'Content-Type,Authorization'"
       AllowOrigin: "'*'"
 
@@ -37,6 +37,25 @@ Resources:
           Properties:
             Path: /api/users
             Method: POST
+
+  GetUserProfileFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/get-user-profile/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UsersTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref UsersTable
+      Events:
+        GetUserProfileApi:
+          Type: Api
+          Properties:
+            Path: /api/users/{userId}
+            Method: GET
 
   PostPerformanceFunction:
     Type: AWS::Serverless::Function
@@ -76,6 +95,25 @@ Resources:
             Path: /api/performances
             Method: GET
 
+  DeletePerformanceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/delete-performance/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PerformancesTable
+      Events:
+        DeletePerformanceApi:
+          Type: Api
+          Properties:
+            Path: /api/performances/{performanceId}
+            Method: DELETE
+
   SignUpForAuditionFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -87,10 +125,14 @@ Resources:
             TableName: !Ref PerformancesTable
         - DynamoDBCrudPolicy:
             TableName: !Ref AuditionsTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt NotificationQueue.QueueName
       Environment:
         Variables:
           PERFORMANCES_TABLE_NAME: !Ref PerformancesTable
           AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+          QUEUE_URL: !Ref NotificationQueue
+          SQS_ENDPOINT: ""
       Events:
         SignUpForAuditionApi:
           Type: Api
@@ -105,10 +147,13 @@ Resources:
     Properties:
       CodeUri: cmd/cast-performer/
       Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
         - DynamoDBCrudPolicy:
             TableName: !Ref AuditionsTable
       Environment:
         Variables:
+          PERFORMANCES_TABLE_NAME: !Ref PerformancesTable
           AUDITIONS_TABLE_NAME: !Ref AuditionsTable
       Events:
         CastPerformerApi:
@@ -116,6 +161,51 @@ Resources:
           Properties:
             Path: /api/performances/{performanceId}/cast
             Method: POST
+
+  GetUserAuditionsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/get-user-auditions/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref AuditionsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref PerformancesTable
+      Environment:
+        Variables:
+          AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+          PERFORMANCES_TABLE_NAME: !Ref PerformancesTable
+      Events:
+        GetUserAuditionsApi:
+          Type: Api
+          Properties:
+            Path: /api/users/{userId}/auditions
+            Method: GET
+
+  NotifyDirectorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: cmd/notify-director/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditionsTable
+        - SQSPollerPolicy:
+            QueueName: !GetAtt NotificationQueue.QueueName
+      Environment:
+        Variables:
+          AUDITIONS_TABLE_NAME: !Ref AuditionsTable
+      Events:
+        NotificationQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
 
   UsersTable:
     Type: AWS::Serverless::SimpleTable
@@ -137,6 +227,11 @@ Resources:
       PrimaryKey:
         Name: Id
         Type: String
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 60
 
 Outputs:
   ApiGatewayEndpoint:

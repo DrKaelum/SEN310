@@ -1,0 +1,366 @@
+{
+  "info": {
+    "_postman_id": "b1594ec8-5188-4a8c-94df-68e12b7aca68",
+    "name": "AuditionMe Final Project - 12 Step Workflow",
+    "description": "Run against the deployed Prod baseUrl. Between requests 6 and 7, verify SQS metrics, notify-director CloudWatch logs, and notified=true in AuditionsTable.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://REPLACE.execute-api.us-east-2.amazonaws.com/Prod"
+    },
+    {
+      "key": "directorId",
+      "value": ""
+    },
+    {
+      "key": "performerId",
+      "value": ""
+    },
+    {
+      "key": "performanceId",
+      "value": ""
+    },
+    {
+      "key": "auditionId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 - Create Director",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"name\":\"Dana Director\",\"email\":\"dana.director@example.com\",\"phone\":\"555-0101\",\"role\":\"director\",\"password\":\"course-demo-password\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/users"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.expect(body.Id).to.be.a('string').and.not.empty;",
+              "pm.collectionVariables.set('directorId', body.Id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Create Performer",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"name\":\"Parker Performer\",\"email\":\"parker.performer@example.com\",\"phone\":\"555-0102\",\"role\":\"performer\",\"password\":\"course-demo-password\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/users"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.expect(body.Id).to.be.a('string').and.not.empty;",
+              "pm.collectionVariables.set('performerId', body.Id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Create Hamlet Performance",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"title\":\"Hamlet\",\"director\":\"{{directorId}}\",\"castingDirector\":\"Morgan Ray\",\"venue\":\"AuditionMe Main Stage\",\"performanceDates\":[\"2026-10-01\",\"2026-10-02\"],\"characters\":[\"Hamlet\",\"Ophelia\"],\"isLive\":true}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/performances"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.expect(body.Id).to.be.a('string').and.not.empty;",
+              "pm.collectionVariables.set('performanceId', body.Id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Search All Performances",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/performances"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.expect(body.performances.some(item => item.Id === pm.collectionVariables.get('performanceId'))).to.eql(true);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Search Live Performances",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/performances?live=true"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.expect(body.performances.every(item => item.isLive === true)).to.eql(true);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Sign Up for Hamlet Audition",
+      "request": {
+        "description": "After this request, verify the queue NumberOfMessagesSent metric, notify-director CloudWatch receipt/marked_notified logs, and notified=true on this audition before continuing.",
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"performanceId\":\"{{performanceId}}\",\"performerId\":\"{{performerId}}\",\"characterName\":\"Ophelia\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/auditions"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.expect(body.status).to.eql('pending');",
+              "pm.collectionVariables.set('auditionId', body.Id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Cast Performer",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"auditionId\":\"{{auditionId}}\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/performances/{{performanceId}}/cast"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.expect(pm.response.json().status).to.eql('cast');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 - Duplicate Cast Returns 409",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"auditionId\":\"{{auditionId}}\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{baseUrl}}/api/performances/{{performanceId}}/cast"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 409', () => pm.response.to.have.status(409));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 - Get Performer Audition History",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/users/{{performerId}}/auditions"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const audition = body.auditions.find(item => item.Id === pm.collectionVariables.get('auditionId'));",
+              "pm.expect(audition.performanceTitle).to.eql('Hamlet');",
+              "pm.expect(audition.notified).to.eql(true);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - Get Performer Profile",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/users/{{performerId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.expect(body.Id).to.eql(pm.collectionVariables.get('performerId'));",
+              "pm.expect(body).not.to.have.property('password');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Delete Hamlet Performance",
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/api/performances/{{performanceId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.expect(pm.response.json().performanceId).to.eql(pm.collectionVariables.get('performanceId'));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 - Confirm Hamlet Was Deleted",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/performances"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.expect(body.performances.some(item => item.Id === pm.collectionVariables.get('performanceId'))).to.eql(false);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    }
+  ]
+}

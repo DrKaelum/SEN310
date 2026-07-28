@@ -1,4 +1,4 @@
-module auditionme/sign-up-for-audition
+module auditionme/get-user-auditions
 
 go 1.24
 
@@ -8,8 +8,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.11
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.18.4
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.41.0
-	github.com/aws/aws-sdk-go-v2/service/sqs v1.38.3
-	github.com/google/uuid v1.6.0
 )
 
 require (

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -15,6 +16,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/google/uuid"
 )
+
+const postPerformanceAction = "post_performance"
+
+var logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 type PostPerformanceRequest struct {
 	Title            string   `json:"title"`
@@ -50,28 +55,72 @@ type putItemAPI interface {
 	PutItem(context.Context, *dynamodb.PutItemInput, ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
 }
 
-func makeHandler(client putItemAPI, tableName string, configErr error) func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	return func(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func makeHandler(client putItemAPI, tableName string, configErr error) func(context.Context, events.APIGatewayProxyRequest) (result events.APIGatewayProxyResponse, handlerErr error) {
+	return func(ctx context.Context, event events.APIGatewayProxyRequest) (result events.APIGatewayProxyResponse, handlerErr error) {
+		outcome := "unhandled"
+		statusCode := 500
+		performanceID := ""
+		title := ""
+		logger.InfoContext(ctx, "Lambda invocation started",
+			"action", postPerformanceAction,
+			"phase", "start",
+			"requestId", event.RequestContext.RequestID,
+		)
+		defer func() {
+			logger.InfoContext(ctx, "Lambda invocation completed",
+				"action", postPerformanceAction,
+				"phase", "complete",
+				"outcome", outcome,
+				"statusCode", statusCode,
+				"performanceId", performanceID,
+				"title", title,
+			)
+		}()
+		finish := func(code int, resultOutcome string, body any, logValues ...any) (events.APIGatewayProxyResponse, error) {
+			outcome = resultOutcome
+			statusCode = code
+			values := []any{
+				"action", postPerformanceAction,
+				"phase", "outcome",
+				"outcome", resultOutcome,
+				"statusCode", code,
+				"performanceId", performanceID,
+				"title", title,
+			}
+			values = append(values, logValues...)
+			if code >= 500 {
+				logger.ErrorContext(ctx, "Lambda invocation outcome", values...)
+			} else {
+				logger.InfoContext(ctx, "Lambda invocation outcome", values...)
+			}
+			return response(code, body)
+		}
+
 		if event.HTTPMethod == "OPTIONS" {
-			return response(200, map[string]string{"message": "CORS preflight OK"})
+			return finish(200, "cors_preflight", map[string]string{"message": "CORS preflight OK"})
 		}
 		if tableName == "" {
-			return response(500, ErrorResponse{Message: "Server configuration error: TABLE_NAME is not set"})
+			return finish(500, "configuration_failed", ErrorResponse{Message: "Server configuration error: TABLE_NAME is not set"}, "error", "TABLE_NAME is not set")
 		}
 		if configErr != nil || client == nil {
-			return response(500, ErrorResponse{Message: "Server configuration error: unable to initialize AWS"})
+			errorMessage := "unable to initialize AWS"
+			if configErr != nil {
+				errorMessage = configErr.Error()
+			}
+			return finish(500, "configuration_failed", ErrorResponse{Message: "Server configuration error: unable to initialize AWS"}, "error", errorMessage)
 		}
 
 		body, bodyError := requestBody(event)
 		if bodyError != "" {
-			return response(400, ErrorResponse{Message: bodyError})
+			return finish(400, "validation_failed", ErrorResponse{Message: bodyError}, "error", bodyError)
 		}
 		var request PostPerformanceRequest
 		if err := json.Unmarshal([]byte(body), &request); err != nil {
-			return response(400, ErrorResponse{Message: "Invalid request body: expected JSON"})
+			return finish(400, "validation_failed", ErrorResponse{Message: "Invalid request body: expected JSON"}, "error", err.Error())
 		}
+		title = strings.TrimSpace(request.Title)
 		if message := validateRequest(request); message != "" {
-			return response(400, ErrorResponse{Message: message})
+			return finish(400, "validation_failed", ErrorResponse{Message: message}, "error", message)
 		}
 
 		performance := Performance{
@@ -84,15 +133,22 @@ func makeHandler(client putItemAPI, tableName string, configErr error) func(cont
 			Characters:       request.Characters,
 			IsLive:           *request.IsLive,
 		}
+		performanceID = performance.ID
 		item, err := attributevalue.MarshalMap(performance)
 		if err != nil {
-			return response(500, ErrorResponse{Message: "Failed to prepare performance for storage"})
+			return finish(500, "performance_encode_failed", ErrorResponse{Message: "Failed to prepare performance for storage"}, "error", err.Error())
 		}
-		if _, err := client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(tableName), Item: item}); err != nil {
-			return response(500, ErrorResponse{Message: "Failed to store performance"})
+		if _, err := client.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName: aws.String(tableName),
+			Item:      item,
+		}); err != nil {
+			return finish(500, "performance_write_failed", ErrorResponse{Message: "Failed to store performance"}, "error", err.Error())
 		}
 
-		return response(200, PostPerformanceResponse{Performance: performance, Message: "Performance created successfully"})
+		return finish(200, "performance_created", PostPerformanceResponse{
+			Performance: performance,
+			Message:     "Performance created successfully",
+		})
 	}
 }
 
@@ -159,7 +215,7 @@ func response(statusCode int, body any) (events.APIGatewayProxyResponse, error) 
 			"Content-Type":                 "application/json",
 			"Access-Control-Allow-Origin":  "*",
 			"Access-Control-Allow-Headers": "Content-Type,Authorization",
-			"Access-Control-Allow-Methods": "OPTIONS,POST,GET",
+			"Access-Control-Allow-Methods": "OPTIONS,POST,GET,DELETE",
 		},
 		Body: string(bodyJSON),
 	}, nil

@@ -1,0 +1,14 @@
+{
+  "httpMethod": "DELETE",
+  "path": "/api/performances/performance-delete-local",
+  "headers": {},
+  "queryStringParameters": null,
+  "body": null,
+  "pathParameters": {
+    "performanceId": "performance-delete-local"
+  },
+  "requestContext": {
+    "resourcePath": "/api/performances/{performanceId}",
+    "httpMethod": "DELETE"
+  }
+}

@@ -71,19 +71,19 @@ func makeHandler(client putItemAPI, tableName string, configErr error) func(cont
 			return response(400, ErrorResponse{Message: "Invalid request body: expected JSON"})
 		}
 
-		if request.Name == "" {
+		if strings.TrimSpace(request.Name) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: name"})
 		}
-		if request.Email == "" {
+		if strings.TrimSpace(request.Email) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: email"})
 		}
-		if request.Phone == "" {
+		if strings.TrimSpace(request.Phone) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: phone"})
 		}
-		if request.Role == "" {
+		if strings.TrimSpace(request.Role) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: role"})
 		}
-		if request.Password == "" {
+		if strings.TrimSpace(request.Password) == "" {
 			return response(400, ErrorResponse{Message: "Missing required field: password"})
 		}
 		if !validateEmail(request.Email) {

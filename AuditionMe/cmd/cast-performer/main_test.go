@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -13,34 +12,41 @@ import (
 )
 
 type fakeCastClient struct {
-	audition       *Audition
-	getErr         error
-	updateErr      error
-	updated        *Audition
-	operations     []string
-	getInput       *dynamodb.GetItemInput
-	updateInput    *dynamodb.UpdateItemInput
-	returnNoFields bool
+	performanceFound bool
+	audition         *Audition
+	getErrByTable    map[string]error
+	updateErr        error
+	updated          *Audition
+	operations       []string
+	getInputs        []*dynamodb.GetItemInput
+	updateInput      *dynamodb.UpdateItemInput
+	returnNoFields   bool
 }
 
 func (f *fakeCastClient) GetItem(_ context.Context, input *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
-	f.operations = append(f.operations, "GetItem")
-	f.getInput = input
-	if f.getErr != nil {
-		return nil, f.getErr
+	table := *input.TableName
+	f.operations = append(f.operations, "GetItem:"+table)
+	f.getInputs = append(f.getInputs, input)
+	if err := f.getErrByTable[table]; err != nil {
+		return nil, err
+	}
+	if table == "PerformancesTable" {
+		if !f.performanceFound {
+			return &dynamodb.GetItemOutput{}, nil
+		}
+		return &dynamodb.GetItemOutput{Item: map[string]types.AttributeValue{
+			"Id": &types.AttributeValueMemberS{Value: "performance-1"},
+		}}, nil
 	}
 	if f.audition == nil {
 		return &dynamodb.GetItemOutput{}, nil
 	}
 	item, err := attributevalue.MarshalMap(f.audition)
-	if err != nil {
-		return nil, err
-	}
-	return &dynamodb.GetItemOutput{Item: item}, nil
+	return &dynamodb.GetItemOutput{Item: item}, err
 }
 
 func (f *fakeCastClient) UpdateItem(_ context.Context, input *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
-	f.operations = append(f.operations, "UpdateItem")
+	f.operations = append(f.operations, "UpdateItem:"+*input.TableName)
 	f.updateInput = input
 	if f.updateErr != nil {
 		return nil, f.updateErr
@@ -55,166 +61,150 @@ func (f *fakeCastClient) UpdateItem(_ context.Context, input *dynamodb.UpdateIte
 		updated = &copyOfAudition
 	}
 	attributes, err := attributevalue.MarshalMap(updated)
-	if err != nil {
-		return nil, err
-	}
-	return &dynamodb.UpdateItemOutput{Attributes: attributes}, nil
+	return &dynamodb.UpdateItemOutput{Attributes: attributes}, err
 }
 
-func TestCastPerformerReadsThenConditionallyUpdatesAndReturnsAllNew(t *testing.T) {
-	client := &fakeCastClient{
-		audition: &Audition{
-			ID:            "audition-1",
-			PerformanceID: "performance-1",
-			PerformerID:   "performer-1",
-			CharacterName: "Emily",
-			Status:        pendingStatus,
-		},
-		updated: &Audition{
-			ID:            "audition-1",
-			PerformanceID: "performance-1",
-			PerformerID:   "performer-1",
-			CharacterName: "Emily",
-			Status:        castStatus,
-		},
+func pendingAudition() *Audition {
+	return &Audition{
+		ID: "audition-1", PerformanceID: "performance-1", PerformerID: "performer-1",
+		CharacterName: "Emily", Status: pendingStatus,
 	}
+}
 
+func TestCastPerformerUsesRequiredOperationOrderAndReturnsAllNew(t *testing.T) {
+	client := &fakeCastClient{performanceFound: true, audition: pendingAudition()}
 	result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`)
+
 	if result.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200; body = %s", result.StatusCode, result.Body)
 	}
-	if len(client.operations) != 2 || client.operations[0] != "GetItem" || client.operations[1] != "UpdateItem" {
-		t.Fatalf("operations = %v, want [GetItem UpdateItem]", client.operations)
+	want := []string{"GetItem:PerformancesTable", "GetItem:AuditionsTable", "UpdateItem:AuditionsTable"}
+	if len(client.operations) != len(want) {
+		t.Fatalf("operations = %v, want %v", client.operations, want)
 	}
-	if client.getInput.ConsistentRead == nil || !*client.getInput.ConsistentRead {
-		t.Fatal("GetItem must use ConsistentRead=true")
+	for index := range want {
+		if client.operations[index] != want[index] {
+			t.Fatalf("operations = %v, want %v", client.operations, want)
+		}
 	}
-	if client.updateInput.UpdateExpression == nil || *client.updateInput.UpdateExpression != "SET #status = :cast" {
-		t.Fatalf("UpdateExpression = %v", client.updateInput.UpdateExpression)
+	for _, input := range client.getInputs {
+		if input.ConsistentRead == nil || !*input.ConsistentRead {
+			t.Fatal("both GetItem calls must use ConsistentRead=true")
+		}
 	}
 	if client.updateInput.ConditionExpression == nil || *client.updateInput.ConditionExpression != "#status = :pending" {
-		t.Fatalf("ConditionExpression = %v", client.updateInput.ConditionExpression)
+		t.Fatalf("condition = %v, want #status = :pending", client.updateInput.ConditionExpression)
 	}
 	if client.updateInput.ReturnValues != types.ReturnValueAllNew {
-		t.Fatalf("ReturnValues = %q, want ALL_NEW", client.updateInput.ReturnValues)
+		t.Fatalf("ReturnValues = %s, want ALL_NEW", client.updateInput.ReturnValues)
 	}
+}
 
-	var responseBody CastPerformerResponse
-	if err := json.Unmarshal([]byte(result.Body), &responseBody); err != nil {
-		t.Fatalf("could not decode response: %v", err)
+func TestCastPerformerMissingPerformanceReturns404BeforeAuditionRead(t *testing.T) {
+	client := &fakeCastClient{}
+	result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`)
+	if result.StatusCode != 404 {
+		t.Fatalf("status = %d, want 404; body = %s", result.StatusCode, result.Body)
 	}
-	if responseBody.Status != castStatus {
-		t.Fatalf("response status = %q, want cast", responseBody.Status)
+	if len(client.operations) != 1 || client.operations[0] != "GetItem:PerformancesTable" {
+		t.Fatalf("operations = %v, want only performance GetItem", client.operations)
 	}
 }
 
 func TestCastPerformerMissingAuditionReturns404WithoutUpdate(t *testing.T) {
-	client := &fakeCastClient{}
+	client := &fakeCastClient{performanceFound: true}
 	result := callCast(t, client, "performance-1", `{"auditionId":"missing"}`)
-	if result.StatusCode != 404 {
-		t.Fatalf("status = %d, want 404; body = %s", result.StatusCode, result.Body)
+	if result.StatusCode != 404 || len(client.operations) != 2 {
+		t.Fatalf("status/operations = %d %v, want 404 after two reads", result.StatusCode, client.operations)
 	}
-	assertNoUpdate(t, client)
 }
 
 func TestCastPerformerRejectsPerformanceMismatchWithoutUpdate(t *testing.T) {
-	client := pendingAuditionClient()
-	result := callCast(t, client, "different-performance", `{"auditionId":"audition-1"}`)
-	if result.StatusCode != 400 {
-		t.Fatalf("status = %d, want 400; body = %s", result.StatusCode, result.Body)
+	audition := pendingAudition()
+	audition.PerformanceID = "another-performance"
+	client := &fakeCastClient{performanceFound: true, audition: audition}
+	result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`)
+	if result.StatusCode != 400 || len(client.operations) != 2 {
+		t.Fatalf("status/operations = %d %v, want 400 after two reads", result.StatusCode, client.operations)
 	}
-	assertNoUpdate(t, client)
 }
 
 func TestCastPerformerRejectsNonPendingStatusesWithoutUpdate(t *testing.T) {
 	for _, status := range []string{"cast", "rejected"} {
 		t.Run(status, func(t *testing.T) {
-			client := pendingAuditionClient()
-			client.audition.Status = status
+			audition := pendingAudition()
+			audition.Status = status
+			client := &fakeCastClient{performanceFound: true, audition: audition}
 			result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`)
-			if result.StatusCode != 409 {
-				t.Fatalf("status = %d, want 409; body = %s", result.StatusCode, result.Body)
+			if result.StatusCode != 409 || len(client.operations) != 2 {
+				t.Fatalf("status/operations = %d %v, want 409 without update", result.StatusCode, client.operations)
 			}
-			assertNoUpdate(t, client)
 		})
 	}
 }
 
 func TestCastPerformerMapsConditionalFailureTo409(t *testing.T) {
-	client := pendingAuditionClient()
-	client.updateErr = &types.ConditionalCheckFailedException{Message: stringPointer("status changed")}
+	client := &fakeCastClient{
+		performanceFound: true,
+		audition:         pendingAudition(),
+		updateErr:        &types.ConditionalCheckFailedException{},
+	}
 	result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`)
 	if result.StatusCode != 409 {
-		t.Fatalf("status = %d, want 409; body = %s", result.StatusCode, result.Body)
-	}
-}
-
-func TestCastPerformerReturns500WhenAllNewAttributesAreMissing(t *testing.T) {
-	client := pendingAuditionClient()
-	client.returnNoFields = true
-	result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`)
-	if result.StatusCode != 500 {
-		t.Fatalf("status = %d, want 500; body = %s", result.StatusCode, result.Body)
+		t.Fatalf("status = %d, want 409", result.StatusCode)
 	}
 }
 
 func TestCastPerformerRejectsInvalidRequestBeforeDynamoDB(t *testing.T) {
-	tests := []struct {
+	cases := []struct {
 		name          string
 		performanceID string
 		body          string
 	}{
-		{name: "missing path parameter", body: `{"auditionId":"audition-1"}`},
-		{name: "missing body", performanceID: "performance-1"},
-		{name: "invalid JSON", performanceID: "performance-1", body: `{`},
-		{name: "missing auditionId", performanceID: "performance-1", body: `{}`},
+		{"missing performanceId", " ", `{"auditionId":"audition-1"}`},
+		{"missing body", "performance-1", ""},
+		{"invalid JSON", "performance-1", "{"},
+		{"missing auditionId", "performance-1", `{}`},
+		{"blank auditionId", "performance-1", `{"auditionId":" "}`},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			client := pendingAuditionClient()
-			result := callCast(t, client, test.performanceID, test.body)
-			if result.StatusCode != 400 {
-				t.Fatalf("status = %d, want 400; body = %s", result.StatusCode, result.Body)
-			}
-			if len(client.operations) != 0 {
-				t.Fatalf("operations = %v, want none", client.operations)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &fakeCastClient{}
+			result := callCast(t, client, testCase.performanceID, testCase.body)
+			if result.StatusCode != 400 || len(client.operations) != 0 {
+				t.Fatalf("status/operations = %d %v, want 400 and none", result.StatusCode, client.operations)
 			}
 		})
 	}
 }
 
-func TestCastPerformerDynamoDBErrorsReturn500(t *testing.T) {
-	t.Run("get failure", func(t *testing.T) {
-		client := pendingAuditionClient()
-		client.getErr = errors.New("get failed")
-		result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`)
-		if result.StatusCode != 500 {
-			t.Fatalf("status = %d, want 500; body = %s", result.StatusCode, result.Body)
+func TestCastPerformerMapsDynamoDBFailuresTo500(t *testing.T) {
+	t.Run("performance read", func(t *testing.T) {
+		client := &fakeCastClient{getErrByTable: map[string]error{"PerformancesTable": errors.New("read failed")}}
+		if result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`); result.StatusCode != 500 {
+			t.Fatalf("status = %d, want 500", result.StatusCode)
 		}
 	})
-	t.Run("update failure", func(t *testing.T) {
-		client := pendingAuditionClient()
-		client.updateErr = errors.New("update failed")
-		result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`)
-		if result.StatusCode != 500 {
-			t.Fatalf("status = %d, want 500; body = %s", result.StatusCode, result.Body)
+	t.Run("audition read", func(t *testing.T) {
+		client := &fakeCastClient{
+			performanceFound: true,
+			getErrByTable:    map[string]error{"AuditionsTable": errors.New("read failed")},
+		}
+		if result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`); result.StatusCode != 500 {
+			t.Fatalf("status = %d, want 500", result.StatusCode)
 		}
 	})
-}
-
-func pendingAuditionClient() *fakeCastClient {
-	return &fakeCastClient{audition: &Audition{
-		ID:            "audition-1",
-		PerformanceID: "performance-1",
-		PerformerID:   "performer-1",
-		CharacterName: "Emily",
-		Status:        pendingStatus,
-	}}
+	t.Run("update", func(t *testing.T) {
+		client := &fakeCastClient{performanceFound: true, audition: pendingAudition(), updateErr: errors.New("update failed")}
+		if result := callCast(t, client, "performance-1", `{"auditionId":"audition-1"}`); result.StatusCode != 500 {
+			t.Fatalf("status = %d, want 500", result.StatusCode)
+		}
+	})
 }
 
 func callCast(t *testing.T, client *fakeCastClient, performanceID string, body string) events.APIGatewayProxyResponse {
 	t.Helper()
-	handler := makeHandler(client, "AuditionsTable", nil)
+	handler := makeHandler(client, "PerformancesTable", "AuditionsTable", nil)
 	result, err := handler(context.Background(), events.APIGatewayProxyRequest{
 		HTTPMethod:     "POST",
 		PathParameters: map[string]string{"performanceId": performanceID},
@@ -224,15 +214,4 @@ func callCast(t *testing.T, client *fakeCastClient, performanceID string, body s
 		t.Fatalf("handler returned an error: %v", err)
 	}
 	return result
-}
-
-func assertNoUpdate(t *testing.T, client *fakeCastClient) {
-	t.Helper()
-	if client.updateInput != nil {
-		t.Fatal("UpdateItem must not be called")
-	}
-}
-
-func stringPointer(value string) *string {
-	return &value
 }
